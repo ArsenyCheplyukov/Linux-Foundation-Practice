@@ -1,0 +1,10 @@
+# Editor / OS junk
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Local experimental output
+/tmp-output/
+*.log
