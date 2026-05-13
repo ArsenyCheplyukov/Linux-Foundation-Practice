@@ -120,7 +120,91 @@ pkill sleep
 
 ---
 
-## 1.3 — SIGTERM vs SIGKILL (next session)
+## 1.3 — SIGTERM vs SIGKILL
 
-To be added: experiment with a script that catches SIGTERM and shuts down cleanly, demonstrating why `kill -9` is the wrong first move.
+### Concept
+
+`SIGTERM` (signal 15) is a polite request to terminate. Processes can **catch** it and run cleanup before exiting. `SIGKILL` (signal 9) is unconditional — the kernel kills the process before it can react. Cleanup never runs.
+
+This exercise builds a process that traps SIGTERM and observes what happens when you kill it the two ways.
+
+### Setup
+
+Use `scripts/graceful-victim.sh` from this repo. It writes its state to `/tmp/victim-state.log` and its PID to `/tmp/victim.pid`. On SIGTERM, it logs the cleanup and removes the PID file. On SIGKILL, neither happens.
+
+### Part 1 — SIGTERM (graceful)
+
+```bash
+./01-processes-and-signals/scripts/graceful-victim.sh &
+sleep 2
+cat /tmp/victim-state.log
+ls -la /tmp/victim.pid
+kill <PID>          # SIGTERM is the default
+sleep 3
+cat /tmp/victim-state.log
+ls -la /tmp/victim.pid 2>&1
+```
+
+Expected: log contains `SIGTERM received` and `cleanup done`. PID file is removed.
+
+### Part 2 — SIGKILL (forced)
+
+```bash
+./01-processes-and-signals/scripts/graceful-victim.sh &
+sleep 2
+kill -9 <PID>       # or kill -KILL <PID>
+sleep 3
+cat /tmp/victim-state.log
+ls -la /tmp/victim.pid 2>&1
+```
+
+Expected: log has only `started` and `running` lines. **No cleanup entry.** PID file still exists — orphaned.
+
+### Part 3 — TERM on a stubborn process
+
+Make a copy of the script that ignores SIGTERM:
+
+```bash
+cp 01-processes-and-signals/scripts/graceful-victim.sh /tmp/stubborn-victim.sh
+chmod +x /tmp/stubborn-victim.sh
+sed -i 's|trap cleanup TERM|trap "" TERM|' /tmp/stubborn-victim.sh
+```
+
+`trap "" SIGNAL` is the idiom for "ignore this signal."
+
+```bash
+/tmp/stubborn-victim.sh &
+sleep 2
+kill <PID>          # SIGTERM — will be ignored
+sleep 3
+ps -p <PID> -o pid,stat,cmd
+```
+
+Process is still alive. Only SIGKILL can stop it now:
+
+```bash
+kill -9 <PID>
+ps -p <PID> -o pid,stat,cmd 2>&1
+```
+
+### Self-check
+
+1. In what scenario does `kill -9` leave the system in an **incorrect state** while `kill` (TERM) leaves it correct? Concrete example required.
+2. Which **two signals** can the kernel guarantee cannot be caught or ignored by a process?
+3. What is the correct **escalation pattern** when you want to terminate a running process: what order, what waits, what fallbacks?
+4. Why do well-written processes trap SIGTERM at all? What do they do in the handler beyond just ignoring the signal?
+
+### Pitfalls encountered
+
+- Naming `kill` and `SIGKILL` as "two uncatchable signals" — they are the **same signal**. The two uncatchable ones are **SIGKILL and SIGSTOP**.
+- Going straight to `kill -9` without trying `kill` first — gives the process no chance to flush state, release locks, finalize transactions.
+- Forgetting the **wait** between TERM and KILL — escalation is `TERM → wait 5–60s → KILL`, not back-to-back. systemd's `TimeoutStopSec=` (default 90s) implements exactly this.
+- Trying to kill a process in `D` state — neither TERM nor KILL deliver. The kernel is mid-syscall on I/O and will not return until the device responds.
+
+### Cleanup
+
+```bash
+rm -f /tmp/victim.pid /tmp/victim-state.log /tmp/stubborn-victim.sh
+```
+
 
